@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-var rpcFunctions = make(map[string]func(params ...interface{}) interface{})
+var rpcFunctions = make(map[string]func(params ...interface{}) (interface{}, error))
 
 type RPCRequestParams struct {
 	Name  string      `json:"name"`
@@ -29,11 +29,11 @@ func GetRPCProp() (*amqp.Channel, <-chan amqp.Delivery) {
 	return ch, msgs
 }
 
-func RegisterRPCFunction(name string, f func(params ...interface{}) interface{}) {
+func RegisterRPCFunction(name string, f func(params ...interface{}) (interface{}, error)) {
 	rpcFunctions[name] = f
 }
 
-func CallRPC(request RPCRequest, dst interface{}) {
+func CallRPC(request RPCRequest, dst interface{}) error {
 	ch, _ := message.GetChannel()
 	q, _ := ch.QueueDeclare("", false, false, true, false, nil)
 	msgs, _ := ch.Consume(q.Name, "", true, false, false, false, nil)
@@ -51,16 +51,21 @@ func CallRPC(request RPCRequest, dst interface{}) {
 	})
 
 	if err != nil {
-		fmt.Println(err.Error())
-		return
+		return err
 	}
 
 	for d := range msgs {
 		if corrID == d.CorrelationId {
+			if d.ContentType == "text/plain" {
+				return fmt.Errorf(string(d.Body))
+			}
+
 			_ = json.Unmarshal(d.Body, dst)
 			break
 		}
 	}
+
+	return nil
 }
 
 func RPCServer() {
@@ -88,7 +93,16 @@ func RPCServer() {
 		}
 
 		//call function
-		result := f(params...)
+		result, err := f(params...)
+
+		if err != nil {
+			_ = ch.PublishWithContext(ctx, "", d.ReplyTo, false, false, amqp.Publishing{
+				ContentType:   "text/plain",
+				CorrelationId: d.CorrelationId,
+				Body:          []byte(err.Error()),
+			})
+			continue
+		}
 
 		parseResult, _ := json.Marshal(result)
 		//send result
