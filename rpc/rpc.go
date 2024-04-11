@@ -40,6 +40,7 @@ func CallRPC(request RPCRequest, dst interface{}) error {
 	corrID, _ := message.GenerateRandomString(32)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	defer ch.Close()
 
 	jsonRequest, _ := json.Marshal(request)
 
