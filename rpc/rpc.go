@@ -33,15 +33,13 @@ func RegisterRPCFunction(name string, f func(params ...interface{}) interface{})
 	rpcFunctions[name] = f
 }
 
-func CallRPC(request RPCRequest, timeout time.Duration, dst *interface{}) {
+func CallRPC(request RPCRequest, dst interface{}) {
 	ch, _ := message.GetChannel()
 	q, _ := ch.QueueDeclare("", false, false, true, false, nil)
 	msgs, _ := ch.Consume(q.Name, "", true, false, false, false, nil)
 	corrID, _ := message.GenerateRandomString(32)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	contextWait, cancelWait := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	defer cancelWait()
 
 	jsonRequest, _ := json.Marshal(request)
 
@@ -58,14 +56,9 @@ func CallRPC(request RPCRequest, timeout time.Duration, dst *interface{}) {
 	}
 
 	for d := range msgs {
-		select {
-		case <-contextWait.Done():
-			return
-		default:
-			if corrID == d.CorrelationId {
-				_ = json.Unmarshal(d.Body, dst)
-				break
-			}
+		if corrID == d.CorrelationId {
+			_ = json.Unmarshal(d.Body, dst)
+			break
 		}
 	}
 }
