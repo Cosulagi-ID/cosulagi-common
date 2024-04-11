@@ -102,6 +102,8 @@ func RPCServer() {
 				CorrelationId: d.CorrelationId,
 				Body:          []byte(err.Error()),
 			})
+
+			_ = d.Reject(false)
 			continue
 		}
 
