@@ -74,6 +74,7 @@ func RPCServer() {
 	defer cancel()
 
 	ch, msgs := GetRPCProp()
+	defer ch.Close()
 
 	for d := range msgs {
 		//parse body to RPCRequest
