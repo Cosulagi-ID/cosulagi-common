@@ -54,6 +54,7 @@ func CallRPC(request RPCRequest, dst interface{}) error {
 	fmt.Println("calling rpc %s", request.Name)
 
 	if err != nil {
+		fmt.Println("error calling rpc", err)
 		return err
 	}
 
