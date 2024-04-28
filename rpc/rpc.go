@@ -35,7 +35,7 @@ func RegisterRPCFunction(name string, f func(params ...interface{}) (interface{}
 }
 
 func CallRPC(request RPCRequest, dst interface{}) error {
-	ch, err := message.Conn.Channel()
+	ch, err := message.GetChannel()
 	q, err := ch.QueueDeclare("", false, false, true, false, nil)
 	msgs, err := ch.Consume(q.Name, "", true, false, false, false, nil)
 	corrID, err := message.GenerateRandomString(32)
