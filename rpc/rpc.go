@@ -83,6 +83,7 @@ func RPCServer() {
 	}
 
 	for d := range msgs {
+		fmt.Println("got messages from rpc_queue", string(d.Body), "reply to", d.ReplyTo, "correlation id", d.CorrelationId, "content type", d.ContentType)
 		//parse body to RPCRequest
 		var rpcRequest RPCRequest
 		_ = json.Unmarshal(d.Body, &rpcRequest)
