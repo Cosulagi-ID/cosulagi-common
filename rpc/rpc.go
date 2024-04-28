@@ -83,7 +83,6 @@ func RPCServer() {
 	}
 
 	for d := range msgs {
-		fmt.Println("got messages from rpc_queue", string(d.Body), "reply to", d.ReplyTo, "correlation id", d.CorrelationId, "content type", d.ContentType)
 		//parse body to RPCRequest
 		var rpcRequest RPCRequest
 		_ = json.Unmarshal(d.Body, &rpcRequest)
@@ -91,7 +90,7 @@ func RPCServer() {
 		//get function by name
 		f, ok := rpcFunctions[rpcRequest.Name]
 		if !ok {
-			_ = d.Reject(true)
+			_ = d.Reject(true) //we don't have function with that name, reject the message and give it back to the queue
 			continue
 		}
 
