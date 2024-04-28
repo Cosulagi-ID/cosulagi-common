@@ -21,12 +21,13 @@ type RPCRequest struct {
 	Parameters []RPCRequestParams `json:"parameters"`
 }
 
-func GetRPCProp() (*amqp.Channel, <-chan amqp.Delivery) {
-	ch, _ := message.GetChannel()
-	q, _ := ch.QueueDeclare("rpc_queue", false, false, false, false, nil)
-	_ = ch.Qos(1, 0, false)
-	msgs, _ := ch.Consume(q.Name, "", false, false, false, false, nil)
-	return ch, msgs
+func GetRPCProp() (*amqp.Channel, <-chan amqp.Delivery, error) {
+	ch, err := message.GetChannel()
+	q, err := ch.QueueDeclare("rpc_queue", false, false, false, false, nil)
+	err = ch.Qos(1, 0, false)
+	msgs, err := ch.Consume(q.Name, "", false, false, false, false, nil)
+
+	return ch, msgs, err
 }
 
 func RegisterRPCFunction(name string, f func(params ...interface{}) (interface{}, error)) {
@@ -34,17 +35,17 @@ func RegisterRPCFunction(name string, f func(params ...interface{}) (interface{}
 }
 
 func CallRPC(request RPCRequest, dst interface{}) error {
-	ch, _ := message.GetChannel()
-	q, _ := ch.QueueDeclare("", false, false, true, false, nil)
-	msgs, _ := ch.Consume(q.Name, "", true, false, false, false, nil)
-	corrID, _ := message.GenerateRandomString(32)
+	ch, err := message.GetChannel()
+	q, err := ch.QueueDeclare("", false, false, true, false, nil)
+	msgs, err := ch.Consume(q.Name, "", true, false, false, false, nil)
+	corrID, err := message.GenerateRandomString(32)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	defer ch.Close()
 
-	jsonRequest, _ := json.Marshal(request)
+	jsonRequest, err := json.Marshal(request)
 
-	err := ch.PublishWithContext(ctx, "", "rpc_queue", false, false, amqp.Publishing{
+	err = ch.PublishWithContext(ctx, "", "rpc_queue", false, false, amqp.Publishing{
 		ContentType:   "application/json",
 		CorrelationId: corrID,
 		ReplyTo:       q.Name,
@@ -73,8 +74,12 @@ func RPCServer() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	ch, msgs := GetRPCProp()
+	ch, msgs, err := GetRPCProp()
 	defer ch.Close()
+
+	if err != nil {
+		fmt.Println(err)
+	}
 
 	for d := range msgs {
 		//parse body to RPCRequest
@@ -98,24 +103,33 @@ func RPCServer() {
 		result, err := f(params...)
 
 		if err != nil {
-			_ = ch.PublishWithContext(ctx, "", d.ReplyTo, false, false, amqp.Publishing{
+			err = ch.PublishWithContext(ctx, "", d.ReplyTo, false, false, amqp.Publishing{
 				ContentType:   "text/plain",
 				CorrelationId: d.CorrelationId,
 				Body:          []byte(err.Error()),
 			})
 
-			_ = d.Reject(false)
+			err = d.Reject(false)
+
+			if err != nil {
+				fmt.Println(err)
+			}
+
 			continue
 		}
 
 		parseResult, _ := json.Marshal(result)
 		//send result
-		_ = ch.PublishWithContext(ctx, "", d.ReplyTo, false, false, amqp.Publishing{
+		err = ch.PublishWithContext(ctx, "", d.ReplyTo, false, false, amqp.Publishing{
 			ContentType:   "application/json",
 			CorrelationId: d.CorrelationId,
 			Body:          parseResult,
 		})
 
-		_ = d.Ack(false)
+		err = d.Ack(false)
+
+		if err != nil {
+			fmt.Println(err)
+		}
 	}
 }
