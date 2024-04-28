@@ -91,7 +91,7 @@ func RPCServer() {
 		//get function by name
 		f, ok := rpcFunctions[rpcRequest.Name]
 		if !ok {
-			_ = d.Reject(false)
+			_ = d.Reject(true)
 			continue
 		}
 
