@@ -9,6 +9,7 @@ import (
 )
 
 var Conn *amqp.Connection
+var Channel *amqp.Channel
 
 func Init() {
 	conn, err := amqp.Dial(viper.GetString("RABBITMQ_URL"))
@@ -17,15 +18,16 @@ func Init() {
 	}
 	fmt.Println("Connected to RabbitMQ")
 	Conn = conn
+	ch, err := conn.Channel()
+	if err != nil {
+		fmt.Println(err.Error())
+	}
+	Channel = ch
+
 }
 
 func GetChannel() (*amqp.Channel, error) {
-	ch, err := Conn.Channel()
-	if err != nil {
-		fmt.Println(err.Error())
-		return nil, err
-	}
-	return ch, nil
+	return Channel, nil
 }
 
 func GenerateRandomString(n int) (string, error) {
