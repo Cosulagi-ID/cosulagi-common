@@ -51,8 +51,6 @@ func CallRPC(request RPCRequest, dst interface{}) error {
 		Body:          jsonRequest,
 	})
 
-	fmt.Println("calling rpc %s", request.Name)
-
 	if err != nil {
 		fmt.Println("error calling rpc", err)
 		return err
@@ -60,7 +58,6 @@ func CallRPC(request RPCRequest, dst interface{}) error {
 
 	for d := range msgs {
 		if corrID == d.CorrelationId {
-			fmt.Println("got response from rpc %s", request.Name)
 			if d.ContentType == "text/plain" {
 				return fmt.Errorf(string(d.Body))
 			}
