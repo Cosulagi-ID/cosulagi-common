@@ -77,7 +77,6 @@ func RPCServer() {
 	defer cancel()
 
 	ch, msgs, err := GetRPCProp()
-	defer ch.Close()
 
 	if err != nil {
 		fmt.Println(err)
