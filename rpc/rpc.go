@@ -34,13 +34,26 @@ func RegisterRPCFunction(name string, f func(params ...interface{}) (interface{}
 	rpcFunctions[name] = f
 }
 
-func CallRPC(request RPCRequest, dst interface{}) error {
+func CallRPC(name string, dst interface{}, params ...interface{}) error {
 	ch, err := message.GetChannel()
 	q, err := ch.QueueDeclare("", false, false, true, false, nil)
 	msgs, err := ch.Consume(q.Name, "", true, false, false, false, nil)
 	corrID, err := message.GenerateRandomString(32)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
+	paramsList := make([]RPCRequestParams, 0)
+	for _, param := range params {
+		paramsList = append(paramsList, RPCRequestParams{
+			Name:  "",
+			Value: param,
+		})
+	}
+
+	request := RPCRequest{
+		Name:       name,
+		Parameters: paramsList,
+	}
 
 	jsonRequest, err := json.Marshal(request)
 
