@@ -38,7 +38,10 @@ func RegisterRPCFunction(name string, f func(params ...interface{}) (interface{}
 func CallRPC(name string, dst interface{}, params ...interface{}) error {
 	ch, err := message.GetChannel()
 	if queueRespondRPC == nil {
-		q, _ := ch.QueueDeclare("", false, false, true, false, nil)
+		q, err := ch.QueueDeclare("", false, false, true, false, nil)
+		if err != nil {
+			return err
+		}
 		queueRespondRPC = &q
 	}
 	msgs, err := ch.Consume(queueRespondRPC.Name, "", true, false, false, false, nil)
