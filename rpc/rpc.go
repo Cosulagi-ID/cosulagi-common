@@ -77,6 +77,7 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 	}
 
 	for d := range msgs {
+		fmt.Println(string(d.Body), corrID, d.CorrelationId)
 		if corrID == d.CorrelationId {
 			if d.ContentType == "text/plain" {
 				return fmt.Errorf(string(d.Body))
