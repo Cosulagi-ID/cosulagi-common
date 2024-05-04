@@ -10,6 +10,7 @@ import (
 )
 
 var rpcFunctions = make(map[string]func(params ...interface{}) (interface{}, error))
+var queueRespondRPC *amqp.Queue
 
 type RPCRequestParams struct {
 	Name  string      `json:"name"`
@@ -36,8 +37,11 @@ func RegisterRPCFunction(name string, f func(params ...interface{}) (interface{}
 
 func CallRPC(name string, dst interface{}, params ...interface{}) error {
 	ch, err := message.GetChannel()
-	q, err := ch.QueueDeclare("", false, false, true, false, nil)
-	msgs, err := ch.Consume(q.Name, "", true, false, false, false, nil)
+	if queueRespondRPC == nil {
+		q, _ := ch.QueueDeclare("", false, false, true, false, nil)
+		queueRespondRPC = &q
+	}
+	msgs, err := ch.Consume(queueRespondRPC.Name, "", true, false, false, false, nil)
 	corrID, err := message.GenerateRandomString(32)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -60,7 +64,7 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 	err = ch.PublishWithContext(ctx, "", "rpc_queue", false, false, amqp.Publishing{
 		ContentType:   "application/json",
 		CorrelationId: corrID,
-		ReplyTo:       q.Name,
+		ReplyTo:       queueRespondRPC.Name,
 		Body:          jsonRequest,
 	})
 
