@@ -10,6 +10,7 @@ import (
 )
 
 var rpcFunctions = make(map[string]func(params ...interface{}) (interface{}, error))
+var msgs <-chan amqp.Delivery
 var queueRespondRPC *amqp.Queue
 
 type RPCRequestParams struct {
@@ -37,14 +38,15 @@ func RegisterRPCFunction(name string, f func(params ...interface{}) (interface{}
 
 func CallRPC(name string, dst interface{}, params ...interface{}) error {
 	ch, err := message.GetChannel()
-	if queueRespondRPC == nil {
+	if msgs == nil {
 		q, err := ch.QueueDeclare("", false, false, true, false, nil)
+		queueRespondRPC = &q
 		if err != nil {
 			return err
 		}
-		queueRespondRPC = &q
+		ms, err := ch.Consume(q.Name, "", true, false, false, false, nil)
+		msgs = ms
 	}
-	msgs, err := ch.Consume(queueRespondRPC.Name, "", true, false, false, false, nil)
 	corrID, err := message.GenerateRandomString(32)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
