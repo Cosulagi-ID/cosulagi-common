@@ -71,6 +71,7 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 		CorrelationId: corrID,
 		ReplyTo:       queueRespondRPC.Name,
 		Body:          jsonRequest,
+		Timestamp:     time.Now(),
 	})
 
 	if err != nil {
@@ -109,6 +110,13 @@ func RPCServer() {
 		//get function by name
 		f, ok := rpcFunctions[rpcRequest.Name]
 		if !ok {
+
+			//check if it's 1 hour old
+			if time.Now().Sub(d.Timestamp) > time.Hour {
+				_ = d.Reject(false) //if it's 1 hour old, reject the message, it's probably a dead message
+				continue
+			}
+
 			_ = d.Reject(true) //we don't have function with that name, reject the message and give it back to the queue
 			continue
 		}
