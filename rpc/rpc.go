@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/AsidStorm/go-amqp-reconnect/rabbitmq"
 	"github.com/Cosulagi-ID/cosulagi-common/message"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"time"
@@ -23,7 +24,7 @@ type RPCRequest struct {
 	Parameters []RPCRequestParams `json:"parameters"`
 }
 
-func GetRPCProp() (*amqp.Channel, <-chan amqp.Delivery, error) {
+func GetRPCProp() (*rabbitmq.Channel, <-chan amqp.Delivery, error) {
 	ch, err := message.GetChannel()
 	q, err := ch.QueueDeclare("rpc_queue", false, false, false, false, nil)
 	err = ch.Qos(1, 0, false)
@@ -48,9 +49,7 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 		msgs = ms
 	}
 	corrID, err := message.GenerateRandomString(32)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
+	ctx := context.Background()
 	paramsList := make([]RPCRequestParams, 0)
 	for _, param := range params {
 		paramsList = append(paramsList, RPCRequestParams{

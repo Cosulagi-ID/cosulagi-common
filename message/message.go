@@ -4,15 +4,15 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/AsidStorm/go-amqp-reconnect/rabbitmq"
 	"github.com/spf13/viper"
 )
 
-var Conn *amqp.Connection
-var Channel *amqp.Channel
+var Conn *rabbitmq.Connection
+var Channel *rabbitmq.Channel
 
 func Init() {
-	conn, err := amqp.Dial(viper.GetString("RABBITMQ_URL"))
+	conn, err := rabbitmq.Dial(viper.GetString("RABBITMQ_URL"))
 	if err != nil {
 		fmt.Println(err.Error())
 	}
@@ -26,7 +26,7 @@ func Init() {
 
 }
 
-func GetChannel() (*amqp.Channel, error) {
+func GetChannel() (*rabbitmq.Channel, error) {
 	return Channel, nil
 }
 

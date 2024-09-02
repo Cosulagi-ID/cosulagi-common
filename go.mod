@@ -1,13 +1,16 @@
 module github.com/Cosulagi-ID/cosulagi-common
 
-go 1.21.6
+go 1.22.1
+
+toolchain go1.22.6
 
 require (
-	github.com/rabbitmq/amqp091-go v1.9.0
+	github.com/rabbitmq/amqp091-go v1.10.0
 	github.com/spf13/viper v1.18.2
 )
 
 require (
+	github.com/AsidStorm/go-amqp-reconnect/rabbitmq v0.0.0-20240810055454-769088980e2c // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/magiconair/properties v1.8.7 // indirect
