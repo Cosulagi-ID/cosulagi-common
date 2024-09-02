@@ -84,7 +84,7 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 			_ = json.Unmarshal(d.Body, dst)
 			break
 		} else {
-			d.Nack(false, true)
+			//d.Nack(false, true)
 		}
 	}
 
