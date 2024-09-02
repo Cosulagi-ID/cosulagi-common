@@ -84,6 +84,7 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 			_ = json.Unmarshal(d.Body, dst)
 			break
 		}
+		fmt.Println(corrID, d.CorrelationId)
 	}
 
 	return nil
