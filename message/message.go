@@ -13,6 +13,7 @@ var Channel *rabbitmq.Channel
 
 func Init() {
 	conn, err := rabbitmq.Dial(viper.GetString("RABBITMQ_URL"))
+	rabbitmq.Debug = true
 	if err != nil {
 		fmt.Println(err.Error())
 	}
@@ -27,22 +28,22 @@ func Init() {
 }
 
 func GetChannel() (*rabbitmq.Channel, error) {
-	if Conn.IsClosed() {
-		conn, err := rabbitmq.Dial(viper.GetString("RABBITMQ_URL"))
-		if err != nil {
-			fmt.Println(err.Error())
-		}
-		fmt.Println("Connected to RabbitMQ")
-		Conn = conn
-	}
-
-	if Channel.IsClosed() {
-		ch, err := Conn.Channel()
-		if err != nil {
-			fmt.Println(err.Error())
-		}
-		Channel = ch
-	}
+	//if Conn.IsClosed() {
+	//	conn, err := rabbitmq.Dial(viper.GetString("RABBITMQ_URL"))
+	//	if err != nil {
+	//		fmt.Println(err.Error())
+	//	}
+	//	fmt.Println("Connected to RabbitMQ")
+	//	Conn = conn
+	//}
+	//
+	//if Channel.IsClosed() {
+	//	ch, err := Conn.Channel()
+	//	if err != nil {
+	//		fmt.Println(err.Error())
+	//	}
+	//	Channel = ch
+	//}
 
 	return Channel, nil
 }
