@@ -79,6 +79,7 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 		return err
 	}
 
+	timeout := time.Now().Add(2 * time.Second)
 	for d := range msgs {
 		if corrID == d.CorrelationId {
 			if d.ContentType == "text/plain" {
@@ -87,6 +88,10 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 			_ = json.Unmarshal(d.Body, dst)
 			break
 		}
+		if time.Now().After(timeout) {
+			break
+		}
+		d.Reject(true)
 	}
 
 	return nil
