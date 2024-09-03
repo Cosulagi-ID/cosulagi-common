@@ -51,7 +51,10 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 
 	jsonRequest, err := json.Marshal(request)
 
-	err = ch.Publish("", "rpc_queue", false, false, amqp.Publishing{
+	channelPublish, _ := message.Conn.Channel()
+	defer channelPublish.Close()
+
+	err = channelPublish.Publish("", "rpc_queue", false, false, amqp.Publishing{
 		ContentType: "application/json",
 		ReplyTo:     message.QueueRespondRPC.Name,
 		Body:        jsonRequest,
@@ -63,12 +66,13 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 		return err
 	}
 
-	for d := range message.Msgs {
+	ms, err := ch.Consume(message.QueueRespondRPC.Name, "", true, false, false, false, nil)
+
+	for d := range ms {
 		fmt.Println(d.CorrelationId, "data", string(d.Body))
 		json.Unmarshal(d.Body, &dst)
 		err = d.Ack(false)
 	}
-
 	return err
 }
 

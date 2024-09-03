@@ -12,7 +12,6 @@ import (
 var Conn *amqp.Connection
 var Channel *amqp.Channel
 var QueueRespondRPC *amqp.Queue
-var Msgs <-chan amqp.Delivery
 
 func Init() {
 	conn, err := amqp.Dial(viper.GetString("RABBITMQ_URL"))
@@ -32,8 +31,6 @@ func Init() {
 		fmt.Println(err.Error())
 	}
 	QueueRespondRPC = &q
-	ms, err := ch.Consume(q.Name, "", true, false, false, false, nil)
-	Msgs = ms
 }
 
 func GetChannel() (*amqp.Channel, error) {
