@@ -65,7 +65,7 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 
 	for d := range message.Msgs {
 		fmt.Println(d.CorrelationId, "data", string(d.Body))
-		json.Unmarshal(d.Body, dst)
+		json.Unmarshal(d.Body, &dst)
 		err = d.Ack(false)
 	}
 
