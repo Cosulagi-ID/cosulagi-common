@@ -35,9 +35,9 @@ func RegisterRPCFunction(name string, f func(params ...interface{}) (interface{}
 }
 
 func CallRPC(name string, dst interface{}, params ...interface{}) error {
-
 	ch, err := message.Conn.Channel()
 	defer ch.Close()
+	corrID, err := message.GenerateRandomString(32)
 	paramsList := make([]RPCRequestParams, 0)
 	for _, param := range params {
 		paramsList = append(paramsList, RPCRequestParams{
@@ -53,13 +53,13 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 
 	jsonRequest, err := json.Marshal(request)
 
-	publish := rabbitmq.Publishing{
-		ContentType: "application/json",
-		ReplyTo:     message.QueueRespondRPC.Name,
-		Body:        jsonRequest,
-		Timestamp:   time.Now(),
-	}
-	err = ch.Publish("", "rpc_queue", false, false, publish)
+	err = ch.Publish("", "rpc_queue", false, false, rabbitmq.Publishing{
+		ContentType:   "application/json",
+		CorrelationId: corrID,
+		ReplyTo:       message.QueueRespondRPC.Name,
+		Body:          jsonRequest,
+		Timestamp:     time.Now(),
+	})
 
 	if err != nil {
 		fmt.Println("error calling rpc", err)
@@ -67,10 +67,13 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 	}
 
 	for d := range message.Msgs {
-		fmt.Println(string(d.Body))
+		if d.ContentType == "text/plain" {
+			err = d.Reject(false)
+		}
+		_ = json.Unmarshal(d.Body, dst)
 	}
 
-	return err
+	return nil
 }
 
 func RPCServer() {
@@ -110,8 +113,9 @@ func RPCServer() {
 
 		if err != nil {
 			err = ch.Publish("", d.ReplyTo, false, false, rabbitmq.Publishing{
-				ContentType: "text/plain",
-				Body:        []byte(err.Error()),
+				ContentType:   "text/plain",
+				CorrelationId: d.CorrelationId,
+				Body:          []byte(err.Error()),
 			})
 
 			err = d.Reject(false)
@@ -126,8 +130,9 @@ func RPCServer() {
 		parseResult, _ := json.Marshal(result)
 		//send result
 		err = ch.Publish("", d.ReplyTo, false, false, rabbitmq.Publishing{
-			ContentType: "application/json",
-			Body:        parseResult,
+			ContentType:   "application/json",
+			CorrelationId: d.CorrelationId,
+			Body:          parseResult,
 		})
 
 		err = d.Ack(false)

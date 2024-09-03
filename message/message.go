@@ -27,12 +27,12 @@ func Init() {
 		fmt.Println(err.Error())
 	}
 	Channel = ch
-	q, err := ch.QueueDeclare("rpc_queue", false, false, false, false, nil)
+	q, err := ch.QueueDeclare("", false, false, true, false, nil)
 	if err != nil {
 		fmt.Println(err.Error())
 	}
 	QueueRespondRPC = &q
-	ms, err := ch.Consume(q.Name, "", false, false, false, false, nil)
+	ms, err := ch.Consume(q.Name, "", true, false, false, false, nil)
 	Msgs = ms
 }
 
