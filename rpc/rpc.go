@@ -65,13 +65,8 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 
 	for d := range message.Msgs {
 		fmt.Println(d.CorrelationId, "data", string(d.Body))
-		//if d.ContentType == "text/plain" {
-		//	err = fmt.Errorf(string(d.Body))
-		//	d.Reject(false)
-		//} else {
-		//	json.Unmarshal(d.Body, dst)
-		//	d.Ack(false)
-		//}
+		json.Unmarshal(d.Body, dst)
+		err = d.Ack(false)
 	}
 
 	return err
