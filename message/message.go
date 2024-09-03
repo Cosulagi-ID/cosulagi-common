@@ -27,7 +27,7 @@ func Init() {
 		fmt.Println(err.Error())
 	}
 	Channel = ch
-	q, err := ch.QueueDeclare("", false, false, true, false, nil)
+	q, err := ch.QueueDeclare("", false, false, false, false, nil)
 	if err != nil {
 		fmt.Println(err.Error())
 	}
