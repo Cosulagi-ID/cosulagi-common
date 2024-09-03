@@ -37,7 +37,8 @@ func RegisterRPCFunction(name string, f func(params ...interface{}) (interface{}
 }
 
 func CallRPC(name string, dst interface{}, params ...interface{}) error {
-	ch, err := message.GetChannel()
+	ch, err := message.Conn.Channel()
+	defer ch.Close()
 	if msgs == nil {
 		q, err := ch.QueueDeclare("", false, false, true, false, nil)
 		queueRespondRPC = &q
