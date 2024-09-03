@@ -68,12 +68,15 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 
 	for d := range message.Msgs {
 		if d.ContentType == "text/plain" {
-			err = d.Reject(false)
+			err = fmt.Errorf(string(d.Body))
+			d.Reject(false)
+		} else {
+			json.Unmarshal(d.Body, dst)
+			d.Ack(false)
 		}
-		_ = json.Unmarshal(d.Body, dst)
 	}
 
-	return nil
+	return err
 }
 
 func RPCServer() {
