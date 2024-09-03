@@ -122,9 +122,8 @@ func RPCServer() {
 
 		if err != nil {
 			err = ch.Publish("", d.ReplyTo, false, false, rabbitmq.Publishing{
-				ContentType:   "text/plain",
-				CorrelationId: d.CorrelationId,
-				Body:          []byte(err.Error()),
+				ContentType: "text/plain",
+				Body:        []byte(err.Error()),
 			})
 
 			err = d.Reject(false)
@@ -139,9 +138,8 @@ func RPCServer() {
 		parseResult, _ := json.Marshal(result)
 		//send result
 		err = ch.Publish("", d.ReplyTo, false, false, rabbitmq.Publishing{
-			ContentType:   "application/json",
-			CorrelationId: d.CorrelationId,
-			Body:          parseResult,
+			ContentType: "application/json",
+			Body:        parseResult,
 		})
 
 		err = d.Ack(false)
