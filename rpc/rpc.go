@@ -57,11 +57,10 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 	jsonRequest, err := json.Marshal(request)
 
 	err = ch.Publish("", "rpc_queue", false, false, rabbitmq.Publishing{
-		ContentType:   "application/json",
-		CorrelationId: corrID,
-		ReplyTo:       message.QueueRespondRPC.Name,
-		Body:          jsonRequest,
-		Timestamp:     time.Now(),
+		ContentType: "application/json",
+		ReplyTo:     message.QueueRespondRPC.Name,
+		Body:        jsonRequest,
+		Timestamp:   time.Now(),
 	})
 
 	if err != nil {
