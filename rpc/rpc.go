@@ -10,8 +10,6 @@ import (
 )
 
 var rpcFunctions = make(map[string]func(params ...interface{}) (interface{}, error))
-var msgs <-chan amqp.Delivery
-var queueRespondRPC *amqp.Queue
 
 type RPCRequestParams struct {
 	Name  string      `json:"name"`
@@ -39,15 +37,11 @@ func RegisterRPCFunction(name string, f func(params ...interface{}) (interface{}
 func CallRPC(name string, dst interface{}, params ...interface{}) error {
 	ch, err := message.Conn.Channel()
 	defer ch.Close()
-	if msgs == nil {
-		q, err := ch.QueueDeclare("", false, false, false, false, nil)
-		queueRespondRPC = &q
-		if err != nil {
-			return err
-		}
-		ms, err := ch.Consume(q.Name, "", false, false, false, false, nil)
-		msgs = ms
+	q, err := ch.QueueDeclare("", false, false, false, false, nil)
+	if err != nil {
+		return err
 	}
+	ms, err := ch.Consume(q.Name, "", false, false, false, false, nil)
 	corrID, err := message.GenerateRandomString(32)
 	paramsList := make([]RPCRequestParams, 0)
 	for _, param := range params {
@@ -67,7 +61,7 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 	err = ch.Publish("", "rpc_queue", false, false, rabbitmq.Publishing{
 		ContentType:   "application/json",
 		CorrelationId: corrID,
-		ReplyTo:       queueRespondRPC.Name,
+		ReplyTo:       q.Name,
 		Body:          jsonRequest,
 		Timestamp:     time.Now(),
 	})
@@ -77,7 +71,7 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 		return err
 	}
 
-	for d := range msgs {
+	for d := range ms {
 		d.Ack(true)
 		if d.ContentType == "text/plain" {
 
