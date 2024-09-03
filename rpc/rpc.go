@@ -36,9 +36,11 @@ func RegisterRPCFunction(name string, f func(params ...interface{}) (interface{}
 }
 
 func CallRPC(name string, dst interface{}, params ...interface{}) error {
+
 	ch, err := message.Conn.Channel()
 	defer ch.Close()
 	corrID, err := message.GenerateRandomString(32)
+	fmt.Println("corrID", corrID)
 	paramsList := make([]RPCRequestParams, 0)
 	for _, param := range params {
 		paramsList = append(paramsList, RPCRequestParams{
