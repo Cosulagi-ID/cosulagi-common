@@ -70,6 +70,7 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 	for d := range message.Msgs {
 		fmt.Println(publish.CorrelationId, d.CorrelationId, string(d.Body))
 		if publish.CorrelationId != d.CorrelationId {
+			_ = d.Reject(false)
 			continue
 		}
 		if d.ContentType == "text/plain" {
