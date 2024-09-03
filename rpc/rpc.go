@@ -69,7 +69,10 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 	ms, err := ch.Consume(message.QueueRespondRPC.Name, "", true, false, false, false, nil)
 
 	for d := range ms {
-		fmt.Println(d.CorrelationId, "data", string(d.Body))
+		if d.ContentType != "application/json" {
+			err = fmt.Errorf(string(d.Body))
+			d.Nack(false, false)
+		}
 		json.Unmarshal(d.Body, &dst)
 		err = d.Ack(false)
 	}
