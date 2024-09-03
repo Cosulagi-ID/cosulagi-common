@@ -45,7 +45,7 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 		if err != nil {
 			return err
 		}
-		ms, err := ch.Consume(q.Name, "", true, false, false, false, nil)
+		ms, err := ch.Consume(q.Name, "", false, false, false, false, nil)
 		msgs = ms
 	}
 	corrID, err := message.GenerateRandomString(32)
