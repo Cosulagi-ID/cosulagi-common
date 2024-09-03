@@ -80,12 +80,12 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 	for d := range msgs {
 		if corrID == d.CorrelationId {
 			if d.ContentType == "text/plain" {
+
 				return fmt.Errorf(string(d.Body))
 			}
 			_ = json.Unmarshal(d.Body, dst)
+			d.Ack(false)
 			break
-		} else {
-			//d.Nack(false, true)
 		}
 	}
 
