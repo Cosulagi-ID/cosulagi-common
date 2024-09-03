@@ -3,7 +3,6 @@ package rpc
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/AsidStorm/go-amqp-reconnect/rabbitmq"
 	"github.com/Cosulagi-ID/cosulagi-common/message"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"time"
@@ -21,7 +20,7 @@ type RPCRequest struct {
 	Parameters []RPCRequestParams `json:"parameters"`
 }
 
-func GetRPCProp() (*rabbitmq.Channel, <-chan amqp.Delivery, error) {
+func GetRPCProp() (*amqp.Channel, <-chan amqp.Delivery, error) {
 	ch, err := message.GetChannel()
 	q, err := ch.QueueDeclare("rpc_queue", false, false, false, false, nil)
 	err = ch.Qos(1, 0, false)
@@ -52,7 +51,7 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 
 	jsonRequest, err := json.Marshal(request)
 
-	err = ch.Publish("", "rpc_queue", false, false, rabbitmq.Publishing{
+	err = ch.Publish("", "rpc_queue", false, false, amqp.Publishing{
 		ContentType: "application/json",
 		ReplyTo:     message.QueueRespondRPC.Name,
 		Body:        jsonRequest,
@@ -113,7 +112,7 @@ func RPCServer() {
 		result, err := f(params...)
 
 		if err != nil {
-			err = ch.Publish("", d.ReplyTo, false, false, rabbitmq.Publishing{
+			err = ch.Publish("", d.ReplyTo, false, false, amqp.Publishing{
 				ContentType:   "text/plain",
 				CorrelationId: d.CorrelationId,
 				Body:          []byte(err.Error()),
@@ -130,7 +129,7 @@ func RPCServer() {
 
 		parseResult, _ := json.Marshal(result)
 		//send result
-		err = ch.Publish("", d.ReplyTo, false, false, rabbitmq.Publishing{
+		err = ch.Publish("", d.ReplyTo, false, false, amqp.Publishing{
 			ContentType:   "application/json",
 			CorrelationId: d.CorrelationId,
 			Body:          parseResult,

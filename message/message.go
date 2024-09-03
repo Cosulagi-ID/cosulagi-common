@@ -9,13 +9,13 @@ import (
 	"github.com/spf13/viper"
 )
 
-var Conn *rabbitmq.Connection
-var Channel *rabbitmq.Channel
+var Conn *amqp.Connection
+var Channel *amqp.Channel
 var QueueRespondRPC *amqp.Queue
 var Msgs <-chan amqp.Delivery
 
 func Init() {
-	conn, err := rabbitmq.Dial(viper.GetString("RABBITMQ_URL"))
+	conn, err := amqp.Dial(viper.GetString("RABBITMQ_URL"))
 	rabbitmq.Debug = true
 	if err != nil {
 		fmt.Println(err.Error())
@@ -36,7 +36,7 @@ func Init() {
 	Msgs = ms
 }
 
-func GetChannel() (*rabbitmq.Channel, error) {
+func GetChannel() (*amqp.Channel, error) {
 	return Channel, nil
 }
 
