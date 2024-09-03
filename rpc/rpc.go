@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/AsidStorm/go-amqp-reconnect/rabbitmq"
 	"github.com/Cosulagi-ID/cosulagi-common/message"
@@ -37,11 +38,6 @@ func RegisterRPCFunction(name string, f func(params ...interface{}) (interface{}
 func CallRPC(name string, dst interface{}, params ...interface{}) error {
 	ch, err := message.Conn.Channel()
 	defer ch.Close()
-	q, err := ch.QueueDeclare("", false, false, false, false, nil)
-	if err != nil {
-		return err
-	}
-	ms, err := ch.Consume(q.Name, "", false, false, false, false, nil)
 	corrID, err := message.GenerateRandomString(32)
 	paramsList := make([]RPCRequestParams, 0)
 	for _, param := range params {
@@ -61,7 +57,7 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 	err = ch.Publish("", "rpc_queue", false, false, rabbitmq.Publishing{
 		ContentType:   "application/json",
 		CorrelationId: corrID,
-		ReplyTo:       q.Name,
+		ReplyTo:       message.QueueRespondRPC.Name,
 		Body:          jsonRequest,
 		Timestamp:     time.Now(),
 	})
@@ -71,15 +67,14 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 		return err
 	}
 
-	for d := range ms {
+	for d := range message.Msgs {
 		if d.ContentType == "text/plain" {
-			d.Ack(false)
-			return fmt.Errorf(string(d.Body))
+			err = errors.New(string(d.Body))
+			break
 		}
 		_ = json.Unmarshal(d.Body, dst)
-		d.Ack(false)
+		break
 	}
-
 	return nil
 }
 
