@@ -37,7 +37,6 @@ func RegisterRPCFunction(name string, f func(params ...interface{}) (interface{}
 func CallRPC(name string, dst interface{}, params ...interface{}) error {
 	ch, err := message.Conn.Channel()
 	//defer ch.Close()
-	corrID, err := message.GenerateRandomString(32)
 	paramsList := make([]RPCRequestParams, 0)
 	for _, param := range params {
 		paramsList = append(paramsList, RPCRequestParams{
@@ -54,11 +53,10 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 	jsonRequest, err := json.Marshal(request)
 
 	err = ch.Publish("", "rpc_queue", false, false, rabbitmq.Publishing{
-		ContentType:   "application/json",
-		CorrelationId: corrID,
-		ReplyTo:       message.QueueRespondRPC.Name,
-		Body:          jsonRequest,
-		Timestamp:     time.Now(),
+		ContentType: "application/json",
+		ReplyTo:     message.QueueRespondRPC.Name,
+		Body:        jsonRequest,
+		Timestamp:   time.Now(),
 	})
 
 	if err != nil {
