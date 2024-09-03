@@ -40,7 +40,7 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 	ch, err := message.Conn.Channel()
 	defer ch.Close()
 	if msgs == nil {
-		q, err := ch.QueueDeclare("", false, true, false, false, nil)
+		q, err := ch.QueueDeclare("", false, false, false, false, nil)
 		queueRespondRPC = &q
 		if err != nil {
 			return err
