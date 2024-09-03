@@ -72,12 +72,12 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 	}
 
 	for d := range ms {
-		d.Ack(true)
 		if d.ContentType == "text/plain" {
-
+			d.Ack(false)
 			return fmt.Errorf(string(d.Body))
 		}
 		_ = json.Unmarshal(d.Body, dst)
+		d.Ack(false)
 	}
 
 	return nil
