@@ -26,7 +26,10 @@ func Init() {
 		fmt.Println(err.Error())
 	}
 	Channel = ch
-	q, err := ch.QueueDeclare("", false, false, false, false, nil)
+	q, err := ch.QueueDeclare("", false, true, false, false, amqp.Table{
+		"x-message-ttl": 60000,
+		"x-expires":     60000,
+	})
 	if err != nil {
 		fmt.Println(err.Error())
 	}
