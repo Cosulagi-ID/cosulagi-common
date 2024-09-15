@@ -79,7 +79,7 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 		if d.CorrelationId == corrID {
 			err = json.Unmarshal(d.Body, dst)
 			d.Ack(false)
-			ch.Cancel(corrID, false)
+			ch.Cancel(corrID, true)
 			break
 		}
 	}
