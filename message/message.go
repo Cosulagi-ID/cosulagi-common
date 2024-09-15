@@ -11,7 +11,6 @@ import (
 
 var Conn *amqp.Connection
 var Channel *amqp.Channel
-var QueueRespondRPC *amqp.Queue
 
 func Init() {
 	conn, err := amqp.Dial(viper.GetString("RABBITMQ_URL"))
@@ -26,12 +25,6 @@ func Init() {
 		fmt.Println(err.Error())
 	}
 	Channel = ch
-	q, err := ch.QueueDeclare("", false, false, true, false, nil)
-	if err != nil {
-		fmt.Println(err.Error())
-	}
-
-	QueueRespondRPC = &q
 }
 
 func GetChannel() (*amqp.Channel, error) {

@@ -35,6 +35,13 @@ func RegisterRPCFunction(name string, f func(params ...interface{}) (interface{}
 
 func CallRPC(name string, dst interface{}, params ...interface{}) error {
 	ch, err := message.Conn.Channel()
+
+	corrID, _ := message.GenerateRandomString(32)
+	queueResp, err := ch.QueueDeclare(corrID, false, true, true, false, nil)
+	if err != nil {
+		return err
+	}
+
 	//defer ch.Close()
 	paramsList := make([]RPCRequestParams, 0)
 	for _, param := range params {
@@ -54,11 +61,9 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 	channelPublish, _ := message.Conn.Channel()
 	defer channelPublish.Close()
 
-	corrID, _ := message.GenerateRandomString(32)
-
 	err = channelPublish.Publish("", "rpc_queue", false, false, amqp.Publishing{
 		ContentType:   "application/json",
-		ReplyTo:       message.QueueRespondRPC.Name,
+		ReplyTo:       queueResp.Name,
 		Body:          jsonRequest,
 		Timestamp:     time.Now(),
 		CorrelationId: corrID,
@@ -69,7 +74,7 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 		return err
 	}
 
-	ms, err := ch.Consume(message.QueueRespondRPC.Name, corrID, true, false, false, false, nil)
+	ms, err := ch.Consume(queueResp.Name, corrID, true, false, false, false, nil)
 
 	for d := range ms {
 		if d.ContentType != "application/json" {
@@ -80,6 +85,7 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 			err = json.Unmarshal(d.Body, dst)
 			d.Ack(false)
 			ch.Cancel(corrID, true)
+			ch.QueueDelete(queueResp.Name, true, true, true)
 			break
 		}
 		d.Nack(false, true)
