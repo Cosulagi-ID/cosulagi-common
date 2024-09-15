@@ -82,6 +82,7 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 			ch.Cancel(corrID, true)
 			break
 		}
+		d.Nack(false, true)
 	}
 	return err
 }
