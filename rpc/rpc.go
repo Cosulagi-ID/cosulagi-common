@@ -54,11 +54,14 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 	channelPublish, _ := message.Conn.Channel()
 	defer channelPublish.Close()
 
+	corrID, _ := message.GenerateRandomString(32)
+
 	err = channelPublish.Publish("", "rpc_queue", false, false, amqp.Publishing{
-		ContentType: "application/json",
-		ReplyTo:     message.QueueRespondRPC.Name,
-		Body:        jsonRequest,
-		Timestamp:   time.Now(),
+		ContentType:   "application/json",
+		ReplyTo:       message.QueueRespondRPC.Name,
+		Body:          jsonRequest,
+		Timestamp:     time.Now(),
+		CorrelationId: corrID,
 	})
 
 	if err != nil {
@@ -66,15 +69,19 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 		return err
 	}
 
-	ms, err := ch.Consume(message.QueueRespondRPC.Name, "", true, false, false, false, nil)
+	ms, err := ch.Consume(message.QueueRespondRPC.Name, corrID, true, false, false, false, nil)
 
 	for d := range ms {
 		if d.ContentType != "application/json" {
 			err = fmt.Errorf(string(d.Body))
 			d.Nack(false, false)
 		}
-		json.Unmarshal(d.Body, &dst)
-		err = d.Ack(false)
+		if d.CorrelationId == corrID {
+			err = json.Unmarshal(d.Body, dst)
+			d.Ack(false)
+			ch.Cancel(corrID, false)
+			break
+		}
 	}
 	return err
 }
