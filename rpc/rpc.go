@@ -18,6 +18,7 @@ type RPCRequestParams struct {
 type RPCRequest struct {
 	Name       string             `json:"name"`
 	Parameters []RPCRequestParams `json:"parameters"`
+	Timeout    *time.Duration     `json:"timeout"`
 }
 
 func GetRPCProp() (*amqp.Channel, <-chan amqp.Delivery, error) {
@@ -109,9 +110,19 @@ func RPCServer() {
 		f, ok := rpcFunctions[rpcRequest.Name]
 		if !ok {
 
-			//check if it's 1 hour old
-			if time.Now().Sub(d.Timestamp) > time.Hour {
-				_ = d.Reject(false) //if it's 1 hour old, reject the message, it's probably a dead message
+			timeout := rpcRequest.Timeout
+			if timeout == nil {
+				timeout = new(time.Duration)
+				*timeout = 5 * time.Second
+			}
+
+			if time.Now().Sub(d.Timestamp) > *timeout {
+				err = ch.Publish("", d.ReplyTo, false, false, amqp.Publishing{
+					ContentType:   "text/plain",
+					CorrelationId: d.CorrelationId,
+					Body:          []byte("Timeout"),
+				})
+				_ = d.Reject(false)
 				continue
 			}
 
