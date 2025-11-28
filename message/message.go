@@ -3,6 +3,7 @@ package message
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"github.com/AsidStorm/go-amqp-reconnect/rabbitmq"
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -12,22 +13,27 @@ import (
 var Conn *amqp.Connection
 var Channel *amqp.Channel
 
-func Init() {
+func Init() error {
 	conn, err := amqp.Dial(viper.GetString("RABBITMQ_URL"))
 	rabbitmq.Debug = true
 	if err != nil {
-		fmt.Println(err.Error())
+		return fmt.Errorf("failed to connect to RabbitMQ: %w", err)
 	}
 	fmt.Println("Connected to RabbitMQ")
 	Conn = conn
 	ch, err := conn.Channel()
 	if err != nil {
-		fmt.Println(err.Error())
+		conn.Close()
+		return fmt.Errorf("failed to open channel: %w", err)
 	}
 	Channel = ch
+	return nil
 }
 
 func GetChannel() (*amqp.Channel, error) {
+	if Channel == nil {
+		return nil, errors.New("channel is nil, connection not initialized")
+	}
 	return Channel, nil
 }
 

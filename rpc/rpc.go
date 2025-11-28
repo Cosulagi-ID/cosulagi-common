@@ -23,11 +23,29 @@ type RPCRequest struct {
 
 func GetRPCProp() (*amqp.Channel, <-chan amqp.Delivery, error) {
 	ch, err := message.GetChannel()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get channel: %w", err)
+	}
+	if ch == nil {
+		return nil, nil, fmt.Errorf("channel is nil")
+	}
+	
 	q, err := ch.QueueDeclare("rpc_queue", false, false, false, false, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to declare queue: %w", err)
+	}
+	
 	err = ch.Qos(1, 0, false)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to set Qos: %w", err)
+	}
+	
 	msgs, err := ch.Consume(q.Name, "", false, false, false, false, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to consume queue: %w", err)
+	}
 
-	return ch, msgs, err
+	return ch, msgs, nil
 }
 
 func RegisterRPCFunction(name string, f func(params ...interface{}) (interface{}, error)) {
@@ -35,15 +53,26 @@ func RegisterRPCFunction(name string, f func(params ...interface{}) (interface{}
 }
 
 func CallRPC(name string, dst interface{}, params ...interface{}) error {
+	if message.Conn == nil {
+		return fmt.Errorf("RabbitMQ connection is nil, connection not initialized")
+	}
+	
 	ch, err := message.Conn.Channel()
+	if err != nil {
+		return fmt.Errorf("failed to create channel: %w", err)
+	}
+	defer ch.Close()
 
-	corrID, _ := message.GenerateRandomString(32)
+	corrID, err := message.GenerateRandomString(32)
+	if err != nil {
+		return fmt.Errorf("failed to generate correlation ID: %w", err)
+	}
+	
 	queueResp, err := ch.QueueDeclare(corrID, false, true, true, false, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to declare response queue: %w", err)
 	}
 
-	//defer ch.Close()
 	paramsList := make([]RPCRequestParams, 0)
 	for _, param := range params {
 		paramsList = append(paramsList, RPCRequestParams{
@@ -58,8 +87,14 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 	}
 
 	jsonRequest, err := json.Marshal(request)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
 
-	channelPublish, _ := message.Conn.Channel()
+	channelPublish, err := message.Conn.Channel()
+	if err != nil {
+		return fmt.Errorf("failed to create publish channel: %w", err)
+	}
 	defer channelPublish.Close()
 
 	err = channelPublish.Publish("", "rpc_queue", false, false, amqp.Publishing{
@@ -71,34 +106,46 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 	})
 
 	if err != nil {
-		fmt.Println("error calling rpc", err)
-		return err
+		return fmt.Errorf("failed to publish RPC request: %w", err)
 	}
 
 	ms, err := ch.Consume(queueResp.Name, corrID, true, false, false, false, nil)
+	if err != nil {
+		return fmt.Errorf("failed to consume response queue: %w", err)
+	}
 
 	for d := range ms {
-		if d.ContentType != "application/json" {
-			err = fmt.Errorf(string(d.Body))
-			d.Nack(false, false)
-		}
 		if d.CorrelationId == corrID {
+			// Found matching correlation ID
+			if d.ContentType != "application/json" {
+				err = fmt.Errorf(string(d.Body))
+				// Don't nack here since we're using auto-ack (true in Consume)
+				ch.Cancel(corrID, true)
+				ch.QueueDelete(queueResp.Name, true, true, true)
+				return err
+			}
 			err = json.Unmarshal(d.Body, dst)
-			d.Ack(false)
+			// Don't ack here since we're using auto-ack (true in Consume)
 			ch.Cancel(corrID, true)
 			ch.QueueDelete(queueResp.Name, true, true, true)
-			break
+			return err
 		}
-		d.Nack(false, true)
+		// Message doesn't match correlation ID, ignore it
+		// Don't nack since we're using auto-ack (true in Consume)
 	}
-	return err
+	return fmt.Errorf("no response received")
 }
 
-func RPCServer() {
+func RPCServer() error {
 	ch, msgs, err := GetRPCProp()
-
 	if err != nil {
-		fmt.Println(err)
+		return fmt.Errorf("failed to get RPC properties: %w", err)
+	}
+	if ch == nil {
+		return fmt.Errorf("channel is nil")
+	}
+	if msgs == nil {
+		return fmt.Errorf("message channel is nil")
 	}
 
 	for d := range msgs {
@@ -164,9 +211,10 @@ func RPCServer() {
 		})
 
 		err = d.Ack(false)
-
 		if err != nil {
-			fmt.Println(err)
+			fmt.Printf("Error acknowledging message: %v\n", err)
 		}
 	}
+	
+	return nil
 }
