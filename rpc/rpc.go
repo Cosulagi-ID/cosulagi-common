@@ -3,12 +3,67 @@ package rpc
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"github.com/Cosulagi-ID/cosulagi-common/message"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"time"
 )
 
 var rpcFunctions = make(map[string]func(params ...interface{}) (interface{}, error))
+
+// isChannelClosed checks if the channel is closed or invalid
+func isChannelClosed(ch *amqp.Channel) bool {
+	if ch == nil {
+		return true
+	}
+	// Check if channel is closed by trying to get its state
+	// If channel is closed, IsClosed() will return true
+	return ch.IsClosed()
+}
+
+// safeAck safely acknowledges a message, handling errors gracefully
+func safeAck(d amqp.Delivery) error {
+	if d.Acknowledger == nil {
+		return fmt.Errorf("delivery acknowledger is nil")
+	}
+	err := d.Ack(false)
+	if err != nil {
+		errMsg := strings.ToLower(err.Error())
+		// Ignore "unknown delivery tag" errors as the message may have already been acked
+		if strings.Contains(errMsg, "unknown delivery tag") {
+			return nil // Message already processed, ignore
+		}
+		// Ignore errors if channel is closed
+		if strings.Contains(errMsg, "channel/connection is not open") ||
+			strings.Contains(errMsg, "channel is not open") ||
+			strings.Contains(errMsg, "504") {
+			return nil // Channel closed, message will be redelivered
+		}
+	}
+	return err
+}
+
+// safeReject safely rejects a message, handling errors gracefully
+func safeReject(d amqp.Delivery, requeue bool) error {
+	if d.Acknowledger == nil {
+		return fmt.Errorf("delivery acknowledger is nil")
+	}
+	err := d.Reject(requeue)
+	if err != nil {
+		errMsg := strings.ToLower(err.Error())
+		// Ignore "unknown delivery tag" errors as the message may have already been processed
+		if strings.Contains(errMsg, "unknown delivery tag") {
+			return nil // Message already processed, ignore
+		}
+		// Ignore errors if channel is closed
+		if strings.Contains(errMsg, "channel/connection is not open") ||
+			strings.Contains(errMsg, "channel is not open") ||
+			strings.Contains(errMsg, "504") {
+			return nil // Channel closed, message will be redelivered
+		}
+	}
+	return err
+}
 
 type RPCRequestParams struct {
 	Name  string      `json:"name"`
@@ -149,6 +204,12 @@ func RPCServer() error {
 	}
 
 	for d := range msgs {
+		// Check if channel is still valid before processing
+		if isChannelClosed(ch) {
+			fmt.Println("Channel closed, breaking message loop")
+			break
+		}
+
 		//parse body to RPCRequest
 		var rpcRequest RPCRequest
 		_ = json.Unmarshal(d.Body, &rpcRequest)
@@ -164,16 +225,26 @@ func RPCServer() error {
 			}
 
 			if time.Now().Sub(d.Timestamp) > *timeout {
-				err = ch.Publish("", d.ReplyTo, false, false, amqp.Publishing{
+				// Try to publish response, but don't fail if channel is closed
+				publishErr := ch.Publish("", d.ReplyTo, false, false, amqp.Publishing{
 					ContentType:   "text/plain",
 					CorrelationId: d.CorrelationId,
 					Body:          []byte("Timeout"),
 				})
-				_ = d.Reject(false)
+				if publishErr != nil {
+					fmt.Printf("Error publishing timeout response: %v\n", publishErr)
+				}
+				// Safely reject the message
+				if rejectErr := safeReject(d, false); rejectErr != nil {
+					fmt.Printf("Error rejecting timeout message: %v\n", rejectErr)
+				}
 				continue
 			}
 
-			_ = d.Reject(true) //we don't have function with that name, reject the message and give it back to the queue
+			// Safely reject and requeue - we don't have function with that name
+			if rejectErr := safeReject(d, true); rejectErr != nil {
+				fmt.Printf("Error rejecting unknown function message: %v\n", rejectErr)
+			}
 			continue
 		}
 
@@ -187,16 +258,19 @@ func RPCServer() error {
 		result, err := f(params...)
 
 		if err != nil {
-			err = ch.Publish("", d.ReplyTo, false, false, amqp.Publishing{
+			// Try to publish error response
+			publishErr := ch.Publish("", d.ReplyTo, false, false, amqp.Publishing{
 				ContentType:   "text/plain",
 				CorrelationId: d.CorrelationId,
 				Body:          []byte(err.Error()),
 			})
+			if publishErr != nil {
+				fmt.Printf("Error publishing error response: %v\n", publishErr)
+			}
 
-			err = d.Reject(false)
-
-			if err != nil {
-				fmt.Println(err)
+			// Safely reject the message without requeue
+			if rejectErr := safeReject(d, false); rejectErr != nil {
+				fmt.Printf("Error rejecting error message: %v\n", rejectErr)
 			}
 
 			continue
@@ -204,15 +278,23 @@ func RPCServer() error {
 
 		parseResult, _ := json.Marshal(result)
 		//send result
-		err = ch.Publish("", d.ReplyTo, false, false, amqp.Publishing{
+		publishErr := ch.Publish("", d.ReplyTo, false, false, amqp.Publishing{
 			ContentType:   "application/json",
 			CorrelationId: d.CorrelationId,
 			Body:          parseResult,
 		})
+		if publishErr != nil {
+			fmt.Printf("Error publishing result: %v\n", publishErr)
+			// If publish failed, reject the message to requeue it
+			if rejectErr := safeReject(d, true); rejectErr != nil {
+				fmt.Printf("Error rejecting after publish failure: %v\n", rejectErr)
+			}
+			continue
+		}
 
-		err = d.Ack(false)
-		if err != nil {
-			fmt.Printf("Error acknowledging message: %v\n", err)
+		// Safely acknowledge the message
+		if ackErr := safeAck(d); ackErr != nil {
+			fmt.Printf("Error acknowledging message: %v\n", ackErr)
 		}
 	}
 	
