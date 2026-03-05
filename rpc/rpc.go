@@ -119,6 +119,16 @@ func RegisterRPCFunction(name string, f func(params ...interface{}) (interface{}
 	rpcFunctions[name] = f
 }
 
+// BusinessError represents an error returned by the remote RPC function (e.g., "record not found")
+// instead of a system-level failure (e.g., connection lost, timeout).
+type BusinessError struct {
+	Message string
+}
+
+func (e *BusinessError) Error() string {
+	return e.Message
+}
+
 // CallRPC calls a registered RPC function by name with optional parameters.
 // It uses a circuit breaker to fail-fast when the broker is repeatedly unavailable,
 // retries up to 3 times with exponential backoff on connection errors,
@@ -141,9 +151,24 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 
 		// Wrap each attempt with the circuit breaker.
 		// If CB is open, this returns ErrCircuitOpen immediately.
+		var businessErr error
 		attemptErr := rpcCircuitBreaker.Do(func() error {
-			return callRPCOnce(name, dst, rpcTimeout, params...)
+			err := callRPCOnce(name, dst, rpcTimeout, params...)
+			if err != nil {
+				// If it's a BusinessError, we capture it and return nil to CB
+				// so it doesn't count as a system failure.
+				if bErr, ok := err.(*BusinessError); ok {
+					businessErr = bErr
+					return nil
+				}
+			}
+			return err
 		})
+
+		// If we captured a business error, return it immediately
+		if businessErr != nil {
+			return businessErr
+		}
 
 		if attemptErr == nil {
 			if attempt > 0 {
@@ -268,7 +293,7 @@ func callRPCOnce(name string, dst interface{}, timeout time.Duration, params ...
 			ch.Cancel(corrID, true)
 			ch.QueueDelete(queueResp.Name, true, true, true)
 			if d.ContentType != "application/json" {
-				return fmt.Errorf(string(d.Body))
+				return &BusinessError{Message: string(d.Body)}
 			}
 			return json.Unmarshal(d.Body, dst)
 		}
