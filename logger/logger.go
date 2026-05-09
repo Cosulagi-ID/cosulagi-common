@@ -32,6 +32,8 @@ type DiscordHook struct {
 	mu        sync.Mutex
 	client    *http.Client
 	rateLimit *RateLimiter
+	stopCh    chan struct{}
+	doneCh    chan struct{}
 }
 
 // DiscordMessage represents a message to be sent to Discord
@@ -95,6 +97,8 @@ func NewDiscordHook(config LogConfig) (*DiscordHook, error) {
 		batch:     make([]*DiscordMessage, 0, config.BatchSize),
 		client:    &http.Client{Timeout: 10 * time.Second},
 		rateLimit: NewRateLimiter(1, 5), // 1 request per second, burst of 5
+		stopCh:    make(chan struct{}),
+		doneCh:    make(chan struct{}),
 	}
 
 	// Start the background worker
@@ -145,6 +149,7 @@ func (h *DiscordHook) Run(e *zerolog.Event, level zerolog.Level, msg string) {
 func (h *DiscordHook) worker() {
 	ticker := time.NewTicker(h.config.BatchTimeout)
 	defer ticker.Stop()
+	defer close(h.doneCh)
 
 	for {
 		select {
@@ -157,8 +162,33 @@ func (h *DiscordHook) worker() {
 			if len(h.batch) > 0 {
 				h.sendBatch()
 			}
+		case <-h.stopCh:
+			// Drain remaining buffered messages before exit.
+			for {
+				select {
+				case msg := <-h.messages:
+					h.batch = append(h.batch, msg)
+				default:
+					if len(h.batch) > 0 {
+						h.sendBatch()
+					}
+					return
+				}
+			}
 		}
 	}
+}
+
+// Stop signals the worker to exit and waits for it to drain.
+func (h *DiscordHook) Stop() {
+	select {
+	case <-h.stopCh:
+		// already stopped
+		return
+	default:
+		close(h.stopCh)
+	}
+	<-h.doneCh
 }
 
 func (h *DiscordHook) sendBatch() {
