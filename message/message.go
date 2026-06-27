@@ -15,7 +15,7 @@ var Conn *rabbitmq.Connection
 var Channel *rabbitmq.Channel
 
 func Init() error {
-	rabbitmq.Debug = true
+	rabbitmq.Debug = viper.GetBool("RABBITMQ_DEBUG")
 	conn, err := rabbitmq.Dial(viper.GetString("RABBITMQ_URL"))
 	if err != nil {
 		return fmt.Errorf("failed to connect to RabbitMQ: %w", err)
