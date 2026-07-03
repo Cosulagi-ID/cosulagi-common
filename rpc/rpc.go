@@ -310,6 +310,15 @@ func callRPCOnce(name string, dst interface{}, timeout time.Duration, params ...
 			if d.ContentType != "application/json" {
 				return &BusinessError{Message: string(d.Body)}
 			}
+			// Fire-and-forget calls pass dst=nil (they only want the side effect and
+			// the success/BusinessError signal, not the payload). json.Unmarshal into a
+			// nil dst always fails with "json: Unmarshal(nil)", which callers that DO
+			// check the error (e.g. addRentalCalendarBlock) misread as an RPC failure —
+			// even though the remote side executed successfully. Treat a JSON response
+			// with no destination as success (FINDING-10).
+			if dst == nil {
+				return nil
+			}
 			return json.Unmarshal(d.Body, dst)
 		}
 	}
