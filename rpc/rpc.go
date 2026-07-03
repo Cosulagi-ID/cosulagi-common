@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -12,6 +13,20 @@ import (
 	"github.com/Cosulagi-ID/cosulagi-common/message"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
+
+// rpcQueueName is the shared RPC request queue every service consumes from and
+// publishes to. It defaults to "rpc_queue" (backward-compatible) but can be
+// overridden per environment via RPC_QUEUE. Dev and prod are already isolated by
+// RabbitMQ vhost; this is belt-and-suspenders so a mis-set vhost can't silently
+// let dev and prod share one queue and cross-answer each other's RPCs (FINDING-4).
+// Server (consumer) and client (publisher) both read this, so the two stay in sync
+// within a process, and a per-env RPC_QUEUE keeps environments apart.
+func rpcQueueName() string {
+	if q := strings.TrimSpace(os.Getenv("RPC_QUEUE")); q != "" {
+		return q
+	}
+	return "rpc_queue"
+}
 
 // rpcCircuitBreaker is the global circuit breaker for all RPC calls.
 // Opens after 5 consecutive connection failures and attempts recovery after 30s.
@@ -97,7 +112,7 @@ func GetRPCProp() (*rabbitmq.Channel, <-chan amqp.Delivery, error) {
 		return nil, nil, fmt.Errorf("channel is nil")
 	}
 
-	q, err := ch.QueueDeclare("rpc_queue", false, false, false, false, nil)
+	q, err := ch.QueueDeclare(rpcQueueName(), false, false, false, false, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to declare queue: %w", err)
 	}
@@ -260,7 +275,7 @@ func callRPCOnce(name string, dst interface{}, timeout time.Duration, params ...
 	}
 	defer channelPublish.Close()
 
-	err = channelPublish.Publish("", "rpc_queue", false, false, rabbitmq.Publishing{
+	err = channelPublish.Publish("", rpcQueueName(), false, false, rabbitmq.Publishing{
 		ContentType:   "application/json",
 		ReplyTo:       queueResp.Name,
 		Body:          jsonRequest,
