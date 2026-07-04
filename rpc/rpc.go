@@ -28,6 +28,45 @@ func rpcQueueName() string {
 	return "rpc_queue"
 }
 
+// queueForRPC returns the queue a request for the given RPC function should be
+// published to. Function names follow the "<Prefix>_<Func>" convention where
+// the prefix identifies the owning service domain (Product_, Store_, User_, ...),
+// so requests are routed to "<base>.<prefix>" and only the service that
+// registered that prefix consumes them.
+//
+// Historically every service consumed one shared queue with QoS 1 and rejected
+// + requeued messages whose function it didn't know. With ~10 consumers a
+// request round-robined through wrong services until it happened to reach the
+// right one, adding seconds of latency per call (observed 1-4.5s on dev) and
+// getting killed with a "Timeout" reply after 5s of bouncing. Prefix routing
+// eliminates the bouncing entirely.
+//
+// Names without a "_" fall back to the shared base queue.
+func queueForRPC(name string) string {
+	base := rpcQueueName()
+	if i := strings.Index(name, "_"); i > 0 {
+		return base + "." + strings.ToLower(name[:i])
+	}
+	return base
+}
+
+// registeredQueues returns the set of queues this service must consume:
+// one per distinct function-name prefix it registered, plus the legacy shared
+// base queue so publishers running older code (which publish everything to the
+// base queue) still get answered during mixed-version rollouts.
+func registeredQueues() []string {
+	seen := map[string]bool{rpcQueueName(): true}
+	queues := []string{rpcQueueName()}
+	for name := range rpcFunctions {
+		q := queueForRPC(name)
+		if !seen[q] {
+			seen[q] = true
+			queues = append(queues, q)
+		}
+	}
+	return queues
+}
+
 // rpcCircuitBreaker is the global circuit breaker for all RPC calls.
 // Opens after 5 consecutive connection failures and attempts recovery after 30s.
 var rpcCircuitBreaker = circuitbreaker.New("rpc", circuitbreaker.Options{
@@ -103,8 +142,13 @@ type RPCRequest struct {
 	Timeout    *time.Duration     `json:"timeout"`
 }
 
-func GetRPCProp() (*rabbitmq.Channel, <-chan amqp.Delivery, error) {
-	ch, err := message.GetChannel()
+func GetRPCProp(queueName string) (*rabbitmq.Channel, <-chan amqp.Delivery, error) {
+	// Dedicated channel per consumer loop: QoS is per-channel, and sharing the
+	// global channel across multiple queue consumers would serialize them.
+	if !message.IsConnected() {
+		return nil, nil, fmt.Errorf("RabbitMQ connection is not available")
+	}
+	ch, err := message.Conn.Channel()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get channel: %w", err)
 	}
@@ -112,7 +156,7 @@ func GetRPCProp() (*rabbitmq.Channel, <-chan amqp.Delivery, error) {
 		return nil, nil, fmt.Errorf("channel is nil")
 	}
 
-	q, err := ch.QueueDeclare(rpcQueueName(), false, false, false, false, nil)
+	q, err := ch.QueueDeclare(queueName, false, false, false, false, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to declare queue: %w", err)
 	}
@@ -275,7 +319,16 @@ func callRPCOnce(name string, dst interface{}, timeout time.Duration, params ...
 	}
 	defer channelPublish.Close()
 
-	err = channelPublish.Publish("", rpcQueueName(), false, false, rabbitmq.Publishing{
+	// Route to the owning service's queue (see queueForRPC). Declare it so the
+	// request isn't dropped when the target service hasn't started (yet) —
+	// it will be picked up as soon as the service consumes, or answered with
+	// "Timeout" by the server-side staleness check if it sat too long.
+	targetQueue := queueForRPC(name)
+	if _, err := channelPublish.QueueDeclare(targetQueue, false, false, false, false, nil); err != nil {
+		return fmt.Errorf("failed to declare target queue: %w", err)
+	}
+
+	err = channelPublish.Publish("", targetQueue, false, false, rabbitmq.Publishing{
 		ContentType:   "application/json",
 		ReplyTo:       queueResp.Name,
 		Body:          jsonRequest,
@@ -324,11 +377,24 @@ func callRPCOnce(name string, dst interface{}, timeout time.Duration, params ...
 	}
 }
 
+// RPCServer consumes every queue this service is responsible for: its
+// prefix-routed queues (derived from the registered function names) plus the
+// legacy shared queue for backward compatibility with older publishers.
+// Call it AFTER all RegisterRPCFunction calls. Blocks forever.
 func RPCServer() error {
+	queues := registeredQueues()
+	for _, q := range queues[1:] {
+		go serveQueue(q)
+	}
+	serveQueue(queues[0])
+	return nil
+}
+
+func serveQueue(queueName string) {
 	for {
-		ch, msgs, err := GetRPCProp()
+		ch, msgs, err := GetRPCProp(queueName)
 		if err != nil {
-			fmt.Printf("RPC setup failed, retrying in 5s: %v\n", err)
+			fmt.Printf("RPC setup failed for queue %q, retrying in 5s: %v\n", queueName, err)
 			time.Sleep(5 * time.Second)
 			continue
 		}
@@ -343,7 +409,7 @@ func RPCServer() error {
 			continue
 		}
 
-		fmt.Println("RPC Server started and waiting for messages...")
+		fmt.Printf("RPC Server started and waiting for messages on %q...\n", queueName)
 
 		for d := range msgs {
 			// Check if channel is still valid before processing
@@ -440,7 +506,8 @@ func RPCServer() error {
 			}
 		}
 
-		fmt.Println("RPC Server message loop ended, reconnecting in 2s...")
+		ch.Close()
+		fmt.Printf("RPC Server message loop for %q ended, reconnecting in 2s...\n", queueName)
 		time.Sleep(2 * time.Second)
 	}
 }
