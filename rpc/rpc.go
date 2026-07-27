@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -390,6 +391,34 @@ func RPCServer() error {
 	return nil
 }
 
+// callHandlerSafely invokes an RPC handler and turns a panic into an ordinary
+// error instead of letting it unwind.
+//
+// Handlers index their arguments positionally (params[0], params[1], ...) and
+// type-assert them, so a request carrying too few parameters — or a parameter of
+// the wrong type — panics. Before this guard that panic escaped serveQueue and
+// terminated the whole process: a single malformed message on the bus was enough
+// to kill a service, and for `auth` that means nobody on the platform can log in.
+//
+// The caller still gets an error response and the message is rejected WITHOUT
+// requeue by the existing error branch, so a poison message cannot loop forever.
+// The returned text is deliberately generic; the panic value and stack go to the
+// service log, not back over the bus.
+func callHandlerSafely(
+	name string,
+	f func(params ...interface{}) (interface{}, error),
+	params []interface{},
+) (result interface{}, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("PANIC in RPC handler %q: %v\n%s\n", name, r, debug.Stack())
+			result = nil
+			err = fmt.Errorf("internal error handling %q", name)
+		}
+	}()
+	return f(params...)
+}
+
 func serveQueue(queueName string) {
 	for {
 		ch, msgs, err := GetRPCProp(queueName)
@@ -463,7 +492,7 @@ func serveQueue(queueName string) {
 			}
 
 			//call function
-			result, err := f(params...)
+			result, err := callHandlerSafely(rpcRequest.Name, f, params)
 
 			if err != nil {
 				// Try to publish error response
