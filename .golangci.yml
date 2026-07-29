@@ -1,0 +1,72 @@
+# Complexity budget for agent-assisted ("vibe") coding.
+#
+# This config does exactly ONE job: keep functions small enough that an agent
+# (or a human at 2am) can hold a whole function in working memory and not
+# misread which branch an authorization check lives in. It deliberately does
+# NOT enable the standard linter set -- turning those on across a legacy
+# codebase produces a flood, everyone stops reading the output, and the whole
+# check becomes noise. Add them later, one at a time, on purpose.
+#
+# NOTE: golangci-lint has no file-length linter. `funlen` measures FUNCTIONS.
+# File-level LOC budgets are enforced by scripts/check-file-loc.sh instead.
+#
+# Requires golangci-lint v2.x (config schema v2).
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - funlen    # function length
+    - gocognit  # cognitive complexity (how hard it is to follow)
+    - cyclop    # cyclomatic complexity (how many paths through it)
+    - nestif    # nested if depth
+
+  settings:
+    funlen:
+      # 80 lines is the hard ceiling; 60 is the target you should feel bad
+      # about crossing. Function length is the single strongest predictor of
+      # an agent editing the wrong branch.
+      lines: 80
+      statements: 50
+      ignore-comments: true
+
+    gocognit:
+      min-complexity: 20
+
+    cyclop:
+      max-complexity: 12
+      # Package-average check off: it punishes packages that legitimately hold
+      # one complex orchestrator plus many trivial helpers.
+      package-average: 0
+
+    nestif:
+      # Flags `if` nesting from depth 4 down. Deeply nested error handling is
+      # where guard clauses go to disappear.
+      min-complexity: 4
+
+  exclusions:
+    generated: lax
+    rules:
+      # Tests are never penalised for length. A long table-driven test is a
+      # feature; making people choose between coverage and a green lint run
+      # is how you lose the coverage.
+      - path: _test\.go
+        linters: [funlen, gocognit, cyclop, nestif]
+      # Wiring/bootstrap is inherently one long sequence with no branching to
+      # misread. Splitting main() into six helpers makes it harder to follow,
+      # not easier.
+      - path: (^|/)main\.go$
+        linters: [funlen]
+      # Route tables are long by nature and contain no logic.
+      - path: (^|/)router/
+        linters: [funlen]
+
+run:
+  tests: true
+  timeout: 5m
+
+issues:
+  # Report everything, every time. The default (50 per linter, 3 per line)
+  # silently hides the tail, which reads as "we only have 50 problems".
+  max-issues-per-linter: 0
+  max-same-issues: 0
