@@ -7,6 +7,7 @@ import (
 	"os"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/AsidStorm/go-amqp-reconnect/rabbitmq"
@@ -141,6 +142,58 @@ type RPCRequest struct {
 	Name       string             `json:"name"`
 	Parameters []RPCRequestParams `json:"parameters"`
 	Timeout    *time.Duration     `json:"timeout"`
+	// Caller identifies which service sent this request, e.g. "user", "auth",
+	// "product" — populated automatically by CallRPC (see callerServiceName),
+	// never by hand at the call site.
+	//
+	// It is OPTIONAL on the wire by design, so a mixed-version rollout across
+	// 12 independently-deployed services can never break:
+	//   - a NEW consumer decoding a request from an OLD producer: the field
+	//     is simply absent from the JSON, Caller decodes to its zero value
+	//     "". Every reader of this field must treat "" as "unknown caller",
+	//     not as an error.
+	//   - an OLD consumer (compiled before this field existed) decoding a
+	//     request from a NEW producer: encoding/json silently ignores JSON
+	//     keys it doesn't have a struct field for. The old RPCRequest struct
+	//     decodes fine and the extra "caller" key is dropped on the floor.
+	// `omitempty` also keeps old-producer traffic byte-for-byte the same as
+	// today when Caller is unset, which it never should be for services built
+	// against this change, but keeps behavior boring if it ever is.
+	Caller string `json:"caller,omitempty"`
+}
+
+// callerName is resolved once per process and reused for every outgoing
+// RPCRequest.
+var (
+	callerNameOnce sync.Once
+	callerName     string
+)
+
+// callerServiceName identifies the calling service without any new
+// configuration. Every Cosulagi service's go.mod module path already follows
+// "github.com/Cosulagi-ID/cosulagi-<service>" (cosulagi-user, cosulagi-auth,
+// cosulagi-product, ...), and Go's runtime/debug.ReadBuildInfo() exposes that
+// path at runtime for free, straight from the compiled binary — no service
+// has to set an env var or a config key for this to work.
+//
+// If build info isn't available (e.g. run via `go run`, or a build mode that
+// strips it) or the module doesn't follow the "cosulagi-<service>" naming
+// convention, this returns "", which CallRPC then sends as an absent Caller —
+// exactly the same wire shape as an old producer, so nothing breaks.
+func callerServiceName() string {
+	callerNameOnce.Do(func() {
+		bi, ok := debug.ReadBuildInfo()
+		if !ok || bi.Main.Path == "" {
+			return
+		}
+		const orgPrefix = "github.com/Cosulagi-ID/cosulagi-"
+		if strings.HasPrefix(bi.Main.Path, orgPrefix) {
+			callerName = strings.TrimPrefix(bi.Main.Path, orgPrefix)
+			return
+		}
+		callerName = bi.Main.Path
+	})
+	return callerName
 }
 
 func GetRPCProp(queueName string) (*rabbitmq.Channel, <-chan amqp.Delivery, error) {
@@ -307,6 +360,7 @@ func callRPCOnce(name string, dst interface{}, timeout time.Duration, params ...
 	request := RPCRequest{
 		Name:       name,
 		Parameters: paramsList,
+		Caller:     callerServiceName(),
 	}
 
 	jsonRequest, err := json.Marshal(request)
@@ -404,6 +458,93 @@ func RPCServer() error {
 // requeue by the existing error branch, so a poison message cannot loop forever.
 // The returned text is deliberately generic; the panic value and stack go to the
 // service log, not back over the bus.
+// seenCallerFunctionPairs tracks which (caller, function) edges have already
+// been logged, so logCallerOnce prints one line per distinct edge instead of
+// one line per RPC call. RPC volume is orders of magnitude higher than the
+// number of distinct edges, so logging every call would drown the logs.
+var seenCallerFunctionPairs sync.Map
+
+// logCallerOnce is step 3 of the RPC caller-identity work: pure observation,
+// no enforcement. It logs the first time a given caller is seen invoking a
+// given function, so that over time the logs accumulate a real map of who
+// calls what across the 12 services — a map that does not exist today and
+// that any future enforcement (see RestrictCallers) needs before it can be
+// turned on safely.
+//
+// A missing caller (old producer, still valid mid-rollout) is logged as
+// "unknown" rather than skipped, so the rollout gap itself is visible in the
+// logs instead of hidden.
+func logCallerOnce(function, caller string) {
+	if caller == "" {
+		caller = "unknown"
+	}
+	key := caller + "->" + function
+	if _, alreadySeen := seenCallerFunctionPairs.LoadOrStore(key, struct{}{}); alreadySeen {
+		return
+	}
+	fmt.Printf("[RPC] first-seen caller=%q function=%q\n", caller, function)
+}
+
+// callerAllowlists maps an RPC function name to the set of caller services
+// permitted to invoke it. Empty (the default, and the state this ships in)
+// means no restriction on that function. Populated only via RestrictCallers,
+// which no handler in any service calls yet.
+var (
+	callerAllowlists   = make(map[string]map[string]bool)
+	callerAllowlistsMu sync.RWMutex
+)
+
+// RestrictCallers is the enforcement primitive for step 4: it is provided but
+// left OFF, because nobody currently knows the real caller map (that's what
+// step 3's logging builds over time) and turning restriction on blind would
+// risk breaking a legitimate caller nobody remembered.
+//
+// It returns fn unchanged, so it drops straight into the existing
+// registration call:
+//
+//	rpc.RegisterRPCFunction("User_AdminDeleteAccount",
+//	    rpc.RestrictCallers("User_AdminDeleteAccount", []string{"auth"}, controller.AdminDeleteAccount))
+//
+// The restriction is enforced by serveQueue at dispatch time, BEFORE the
+// handler runs, by looking up rpcRequest.Name in callerAllowlists — the
+// handler's own func(params ...interface{}) (interface{}, error) signature
+// never has to change, so wrapping a handler with this does not touch any of
+// the twelve services' existing RPC functions.
+//
+// A request with no Caller (old producer, or any request sent before a
+// producer picks up this change) is ALWAYS allowed regardless of the
+// allowlist: a partial rollout, where some producers haven't been rebuilt
+// against this yet, must never start rejecting calls that used to work.
+//
+// Not called by any handler in this change, so callerAllowlists stays empty
+// and every RPC function remains unrestricted exactly as it is today.
+func RestrictCallers(name string, allowed []string, fn func(params ...interface{}) (interface{}, error)) func(params ...interface{}) (interface{}, error) {
+	set := make(map[string]bool, len(allowed))
+	for _, c := range allowed {
+		set[c] = true
+	}
+	callerAllowlistsMu.Lock()
+	callerAllowlists[name] = set
+	callerAllowlistsMu.Unlock()
+	return fn
+}
+
+// callerAllowed reports whether caller may invoke the RPC function name. No
+// allowlist registered for name (the default) means unrestricted. A missing
+// caller is always allowed, see RestrictCallers.
+func callerAllowed(name, caller string) bool {
+	if caller == "" {
+		return true
+	}
+	callerAllowlistsMu.RLock()
+	set, restricted := callerAllowlists[name]
+	callerAllowlistsMu.RUnlock()
+	if !restricted {
+		return true
+	}
+	return set[caller]
+}
+
 func callHandlerSafely(
 	name string,
 	f func(params ...interface{}) (interface{}, error),
@@ -481,6 +622,28 @@ func serveQueue(queueName string) {
 				// Safely reject and requeue - we don't have function with that name
 				if rejectErr := safeReject(d, true); rejectErr != nil {
 					fmt.Printf("Error rejecting unknown function message: %v\n", rejectErr)
+				}
+				continue
+			}
+
+			// Observation only (step 3): build the real caller map before any
+			// enforcement is ever turned on. Does not affect dispatch.
+			logCallerOnce(rpcRequest.Name, rpcRequest.Caller)
+
+			// Enforcement primitive (step 4), OFF today: callerAllowlists is
+			// only ever populated by RestrictCallers, which nothing calls yet,
+			// so this is always true and this branch never fires.
+			if !callerAllowed(rpcRequest.Name, rpcRequest.Caller) {
+				publishErr := ch.Publish("", d.ReplyTo, false, false, rabbitmq.Publishing{
+					ContentType:   "text/plain",
+					CorrelationId: d.CorrelationId,
+					Body:          []byte(fmt.Sprintf("caller %q is not allowed to call %q", rpcRequest.Caller, rpcRequest.Name)),
+				})
+				if publishErr != nil {
+					fmt.Printf("Error publishing caller-restricted response: %v\n", publishErr)
+				}
+				if rejectErr := safeReject(d, false); rejectErr != nil {
+					fmt.Printf("Error rejecting caller-restricted message: %v\n", rejectErr)
 				}
 				continue
 			}
