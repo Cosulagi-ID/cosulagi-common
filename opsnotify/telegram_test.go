@@ -1,0 +1,35 @@
+package opsnotify
+
+import (
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+)
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+func TestSendUsesConfiguredChatAndPrefix(t *testing.T) {
+	t.Setenv("TELEGRAM_BOT_TOKEN", "test-token")
+	t.Setenv("TELEGRAM_CHAT_ID", "123")
+	t.Setenv("TELEGRAM_ALERT_PREFIX", "[DEV]")
+	previous := client
+	t.Cleanup(func() { client = previous })
+	client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodPost || req.URL.String() != "https://api.telegram.org/bottest-token/sendMessage" {
+			t.Fatalf("unexpected Telegram request: %s %s", req.Method, req.URL)
+		}
+		if err := req.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		if req.Form.Get("chat_id") != "123" || req.Form.Get("text") != "[DEV] hello" {
+			t.Fatalf("unexpected Telegram form: %v", req.Form)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"ok":true}`))}, nil
+	})}
+	if err := Send("hello"); err != nil {
+		t.Fatal(err)
+	}
+}
