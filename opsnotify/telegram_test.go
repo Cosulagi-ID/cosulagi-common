@@ -33,3 +33,26 @@ func TestSendUsesConfiguredChatAndPrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSendWithButtonsKeepsCallbackDataOutOfVisibleText(t *testing.T) {
+	t.Setenv("TELEGRAM_BOT_TOKEN", "test-token")
+	t.Setenv("TELEGRAM_CHAT_ID", "123")
+	previous := client
+	t.Cleanup(func() { client = previous })
+	client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if err := req.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(req.Form.Get("text"), "internal-key") {
+			t.Fatal("callback data leaked into visible message")
+		}
+		markup := req.Form.Get("reply_markup")
+		if !strings.Contains(markup, `"text":"Verify"`) || !strings.Contains(markup, `"callback_data":"internal-key"`) {
+			t.Fatalf("unexpected reply markup: %s", markup)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"ok":true}`))}, nil
+	})}
+	if err := SendWithButtons("customer phone", [][]Button{{{Text: "Verify", Data: "internal-key"}}}); err != nil {
+		t.Fatal(err)
+	}
+}

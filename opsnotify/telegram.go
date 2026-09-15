@@ -20,6 +20,29 @@ var client = &http.Client{Timeout: 15 * time.Second}
 // Send posts an operations-only alert. Missing configuration is a no-op so
 // Telegram never becomes a dependency of signup, verification, or checkout.
 func Send(message string) error {
+	return send(message, nil)
+}
+
+type Button struct {
+	Text string `json:"text"`
+	Data string `json:"callback_data"`
+}
+
+// SendWithButtons sends a message with inline action buttons. Callback data is
+// never rendered to the operator, so internal routing keys stay out of chat.
+func SendWithButtons(message string, rows [][]Button) error {
+	return send(message, rows)
+}
+
+func SendWithButtonsAsync(message string, rows [][]Button) {
+	go func() {
+		if err := SendWithButtons(message, rows); err != nil {
+			log.Printf("ops Telegram alert failed: %v", err)
+		}
+	}()
+}
+
+func send(message string, rows [][]Button) error {
 	token := setting("TELEGRAM_BOT_TOKEN")
 	chatID := setting("TELEGRAM_CHAT_ID")
 	if token == "" || chatID == "" {
@@ -31,6 +54,13 @@ func Send(message string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	form := url.Values{"chat_id": {chatID}, "text": {message}, "disable_web_page_preview": {"true"}}
+	if len(rows) > 0 {
+		markup, err := json.Marshal(map[string]interface{}{"inline_keyboard": rows})
+		if err != nil {
+			return err
+		}
+		form.Set("reply_markup", string(markup))
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		"https://api.telegram.org/bot"+token+"/sendMessage", strings.NewReader(form.Encode()))
 	if err != nil {
