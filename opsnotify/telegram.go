@@ -20,7 +20,13 @@ var client = &http.Client{Timeout: 15 * time.Second}
 // Send posts an operations-only alert. Missing configuration is a no-op so
 // Telegram never becomes a dependency of signup, verification, or checkout.
 func Send(message string) error {
-	return send(message, nil)
+	return send(message, nil, true)
+}
+
+// SendUnprefixed posts copy-ready content without the environment label.
+// Use this only for text the operator must copy verbatim to a customer.
+func SendUnprefixed(message string) error {
+	return send(message, nil, false)
 }
 
 type Button struct {
@@ -31,7 +37,7 @@ type Button struct {
 // SendWithButtons sends a message with inline action buttons. Callback data is
 // never rendered to the operator, so internal routing keys stay out of chat.
 func SendWithButtons(message string, rows [][]Button) error {
-	return send(message, rows)
+	return send(message, rows, true)
 }
 
 func SendWithButtonsAsync(message string, rows [][]Button) {
@@ -42,13 +48,13 @@ func SendWithButtonsAsync(message string, rows [][]Button) {
 	}()
 }
 
-func send(message string, rows [][]Button) error {
+func send(message string, rows [][]Button, withPrefix bool) error {
 	token := setting("TELEGRAM_BOT_TOKEN")
 	chatID := setting("TELEGRAM_CHAT_ID")
 	if token == "" || chatID == "" {
 		return nil
 	}
-	if prefix := setting("TELEGRAM_ALERT_PREFIX"); prefix != "" {
+	if prefix := setting("TELEGRAM_ALERT_PREFIX"); withPrefix && prefix != "" {
 		message = prefix + " " + message
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

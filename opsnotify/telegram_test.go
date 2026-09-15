@@ -34,6 +34,26 @@ func TestSendUsesConfiguredChatAndPrefix(t *testing.T) {
 	}
 }
 
+func TestSendUnprefixedKeepsCopyReadyText(t *testing.T) {
+	t.Setenv("TELEGRAM_BOT_TOKEN", "test-token")
+	t.Setenv("TELEGRAM_CHAT_ID", "123")
+	t.Setenv("TELEGRAM_ALERT_PREFIX", "[PROD]")
+	previous := client
+	t.Cleanup(func() { client = previous })
+	client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if err := req.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		if req.Form.Get("text") != "Halo Kak Nindya" {
+			t.Fatalf("copy-ready text must not have an environment prefix: %q", req.Form.Get("text"))
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"ok":true}`))}, nil
+	})}
+	if err := SendUnprefixed("Halo Kak Nindya"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSendWithButtonsKeepsCallbackDataOutOfVisibleText(t *testing.T) {
 	t.Setenv("TELEGRAM_BOT_TOKEN", "test-token")
 	t.Setenv("TELEGRAM_CHAT_ID", "123")
