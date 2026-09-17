@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"runtime/debug"
@@ -69,13 +70,41 @@ func registeredQueues() []string {
 	return queues
 }
 
-// rpcCircuitBreaker is the global circuit breaker for all RPC calls.
-// Opens after 5 consecutive connection failures and attempts recovery after 30s.
-var rpcCircuitBreaker = circuitbreaker.New("rpc", circuitbreaker.Options{
+// rpcBreakerOptions is shared by the broker breaker and every per-RPC-name
+// breaker below: opens after 5 consecutive failures, attempts recovery after 30s.
+var rpcBreakerOptions = circuitbreaker.Options{
 	FailureThreshold: 5,
 	SuccessThreshold: 2,
 	Timeout:          30 * time.Second,
-})
+}
+
+// brokerBreaker is the single global circuit breaker for RabbitMQ broker
+// connectivity itself. It only counts failures for which
+// message.IsConnectionError(err) is true, so it trips when the broker is
+// genuinely down — never when a single RPC name is merely timing out.
+var brokerBreaker = circuitbreaker.New("rpc-broker", rpcBreakerOptions)
+
+// perNameBreakers holds one circuit breaker per RPC function name, so a run
+// of timeouts on one RPC (e.g. Upload_UploadFromLink hitting an unreachable
+// Instagram CDN host) can never open the circuit for an unrelated RPC name
+// (e.g. Product_BatchGetStores).
+var (
+	perNameBreakers   = make(map[string]*circuitbreaker.CircuitBreaker)
+	perNameBreakersMu sync.Mutex
+)
+
+// breakerFor lazily creates and returns the circuit breaker dedicated to the
+// given RPC name.
+func breakerFor(name string) *circuitbreaker.CircuitBreaker {
+	perNameBreakersMu.Lock()
+	defer perNameBreakersMu.Unlock()
+	cb, ok := perNameBreakers[name]
+	if !ok {
+		cb = circuitbreaker.New("rpc:"+name, rpcBreakerOptions)
+		perNameBreakers[name] = cb
+	}
+	return cb
+}
 
 var rpcFunctions = make(map[string]func(params ...interface{}) (interface{}, error))
 
@@ -262,25 +291,39 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 			time.Sleep(delay)
 		}
 
-		// Wrap each attempt with the circuit breaker.
-		// If CB is open, this returns ErrCircuitOpen immediately.
+		// Two-layer circuit breaker: the outer brokerBreaker only opens on
+		// genuine broker connectivity failures, the inner per-name breaker
+		// (breakerFor) opens on any other repeated failure (e.g. timeouts)
+		// for THIS RPC name only, so it can never block unrelated RPCs.
+		// If either CB is open, this returns ErrCircuitOpen immediately.
 		var businessErr error
-		attemptErr := rpcCircuitBreaker.Do(func() error {
-			err := callRPCOnce(name, dst, rpcTimeout, params...)
-			if err != nil {
-				// If it's a BusinessError, we capture it and return nil to CB
-				// so it doesn't count as a system failure.
-				if bErr, ok := err.(*BusinessError); ok {
-					businessErr = bErr
-					return nil
+		var innerErr error
+		attemptErr := brokerBreaker.Do(func() error {
+			innerErr = breakerFor(name).Do(func() error {
+				err := callRPCOnce(name, dst, rpcTimeout, params...)
+				if err != nil {
+					// If it's a BusinessError, we capture it and return nil to CB
+					// so it doesn't count as a system failure.
+					if bErr, ok := err.(*BusinessError); ok {
+						businessErr = bErr
+						return nil
+					}
 				}
+				return err
+			})
+			// Kegagalan yang bukan salah broker (timeout satu RPC, sirkuit
+			// per-nama terbuka) TIDAK boleh ikut membuka sirkuit broker global.
+			if innerErr != nil && !message.IsConnectionError(innerErr) {
+				return nil
 			}
-			return err
+			return innerErr
 		})
-
 		// If we captured a business error, return it immediately
 		if businessErr != nil {
 			return businessErr
+		}
+		if attemptErr == nil && innerErr != nil {
+			attemptErr = innerErr
 		}
 
 		if attemptErr == nil {
@@ -312,16 +355,53 @@ func CallRPC(name string, dst interface{}, params ...interface{}) error {
 	return fmt.Errorf("RPC %q failed after %d attempts: %w", name, maxRetries, lastErr)
 }
 
-// GetCircuitBreakerStats returns the current stats of the global RPC circuit breaker.
+// GetCircuitBreakerStats returns the current stats of the global broker
+// circuit breaker plus every per-RPC-name circuit breaker created so far.
 // Useful for health check endpoints and monitoring dashboards.
 func GetCircuitBreakerStats() map[string]interface{} {
-	return rpcCircuitBreaker.Stats()
+	perNameBreakersMu.Lock()
+	perRPC := make(map[string]interface{}, len(perNameBreakers))
+	for name, cb := range perNameBreakers {
+		perRPC[name] = cb.Stats()
+	}
+	perNameBreakersMu.Unlock()
+
+	return map[string]interface{}{
+		"broker":  brokerBreaker.Stats(),
+		"per_rpc": perRPC,
+	}
 }
 
-// ResetCircuitBreaker manually resets the circuit breaker to closed state.
+// ResetCircuitBreaker manually resets the broker circuit breaker and every
+// per-RPC-name circuit breaker to closed state.
 // Use this for emergency recovery or admin-triggered resets.
 func ResetCircuitBreaker() {
-	rpcCircuitBreaker.Reset()
+	brokerBreaker.Reset()
+	perNameBreakersMu.Lock()
+	for _, cb := range perNameBreakers {
+		cb.Reset()
+	}
+	perNameBreakersMu.Unlock()
+}
+
+// IsTransientError melaporkan apakah err berasal dari infrastruktur (sirkuit
+// terbuka, timeout RPC, broker putus) dan bukan jawaban bisnis dari servis tujuan.
+func IsTransientError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var cbOpen *circuitbreaker.ErrCircuitOpen
+	if errors.As(err, &cbOpen) {
+		return true
+	}
+	if message.IsConnectionError(err) {
+		return true
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "timed out after") || strings.Contains(msg, "failed after ") {
+		return true
+	}
+	return false
 }
 
 // callRPCOnce performs a single RPC call with the given timeout.
